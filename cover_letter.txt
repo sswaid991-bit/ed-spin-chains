@@ -1,0 +1,49 @@
+Dear Editor,
+
+We submit the manuscript "Practical Limits and Numerical Reliability 
+in Exact Diagonalization of Quantum Spin Chains" for consideration 
+as a Research article in Discover Physics.
+
+Exact diagonalization (ED) is a standard baseline for quantum 
+many-body methods, yet several practical choices inside ED codes 
+are made by convention rather than measurement. We provide 
+reproducible measurements, with stated uncertainties and 
+limitations, for three of them:
+
+(i)   the crossover between dense and sparse eigensolvers for 
+      ground-state calculations, including measured Lanczos 
+      iteration counts, and a systematic comparison between 
+      numpy.linalg.eigvalsh and scipy.linalg.eigvalsh (a factor 
+      of 2.3 difference at D ≥ 1024 on the same matrix);
+
+(ii)  the correct finite-size ansatz for open chains, benchmarked 
+      against the exactly solvable critical transverse-field 
+      Ising chain, showing that a 1/N surface term must be 
+      included to recover the bulk energy to 10^-4;
+
+(iii) the benefit of symmetry reduction, quantified as a function 
+      of system size for both the Heisenberg and TFI chains.
+
+We also show that half-chain entanglement entropies of the open 
+Heisenberg chain at N ≤ 16 give effective central charges 
+differing by a factor of three between the two N mod 4 branches, 
+a caution for small-chain central-charge estimates.
+
+The manuscript is a benchmarking study. We do not claim a new 
+method; our contribution is reproducible measurement with 
+explicit limits. All timings are drawn from a single logged 
+calibration session on the same machine, and all deterministic 
+quantities (eigenvalues, iteration counts, sector dimensions) 
+are reproducible on any hardware with the same library versions. 
+All code, raw data, and figure scripts are openly available at 
+https://github.com/sswaid991-bit/ed-spin-chains, including the 
+exact session log with library versions and threadpool 
+information.
+
+The manuscript is not under consideration elsewhere, and all 
+authors have approved its submission. The authors declare no 
+competing interests. No human or animal subjects were involved.
+
+Sincerely,
+Saleh Swaid (corresponding author)
+on behalf of the authors

@@ -1,0 +1,7 @@
+N,D,nnz_measured,nnz_exact,match
+4,6,18,18,True
+6,20,80,80,True
+8,70,350,350,True
+10,252,1512,1512,True
+12,924,6468,6468,True
+14,3432,27456,27456,True

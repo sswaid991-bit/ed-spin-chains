@@ -1,0 +1,1125 @@
+% =========================================================================
+% Compilation draft — clean single-column layout for review and PDF preview.
+% Final submission will use the Springer Nature sn-jnl template.
+%
+% Practical Limits and Numerical Reliability in
+% Exact Diagonalization of Quantum Spin Chains
+%
+% All timings from a single logged calibration session on 2026-10-07:
+%   session 20261007_070101
+% Every numerical value in this manuscript is reproducible from the
+% archived session CSVs with the accompanying reproduce.py script.
+% =========================================================================
+
+\documentclass[pdflatex,sn-mathphys-num]{sn-jnl}
+
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{url}
+
+\graphicspath{{figures/}}
+\newcommand{\safeincludegraphics}[2][]{%
+  \IfFileExists{#2}{\includegraphics[#1]{#2}}{%
+    \IfFileExists{figures/#2}{\includegraphics[#1]{figures/#2}}{%
+      \IfFileExists{results/figures/#2}{\includegraphics[#1]{results/figures/#2}}{%
+        \fbox{\parbox[c][0.24\columnwidth][c]{0.78\columnwidth}{%
+          \centering Missing generated figure: \texttt{#2}}}}}}}
+
+\setlength{\parskip}{0.5ex}
+\setlength{\emergencystretch}{2em}
+
+\begin{document}
+
+\title{Practical Limits and Numerical Reliability in Exact Diagonalization of Quantum Spin Chains}
+
+\author*[1]{\fnm{Saleh} \sur{Swaid}}\email{sswaid991@gmail.com}
+\author[2]{\fnm{M.~Imran} \sur{Jamil}}
+
+\affil*[1]{\orgdiv{Department of Physics}, \orgname{Amran University},
+\orgaddress{\city{Amran}, \country{Yemen}}}
+\affil[2]{\orgdiv{Department of Physics}, \orgname{University of
+Management and Technology}, \orgaddress{\city{Lahore},
+\country{Pakistan}}}
+
+\abstract{%
+\noindent
+Exact diagonalization (ED) remains a reference tool for small quantum
+spin chains, yet several practical choices are made by convention
+rather than by measurement. Using a single-threaded NumPy/SciPy
+implementation on one laptop, we benchmark three such choices for
+open spin-$1/2$ chains. First, we compare dense and sparse Lanczos
+workflows for obtaining the ground-state energy. The sparse solver
+becomes faster at a Hilbert-space dimension $D \approx 2\times10^{2}$,
+with workflow speedups of $\approx 3.4\times10^{2}$ at $D \approx 2000$
+and $\approx 1.1\times10^{3}$ at $D = 4096$ when the dense reference is
+\texttt{numpy.linalg.eigvalsh}. Replacing the dense reference with
+\texttt{scipy.linalg.eigvalsh} reduces the ratio to
+$\approx 6.6\times10^{2}$ at $D = 4096$, because the two libraries
+differ by a factor of $2.3$ on the same matrix. Restricting either
+dense call to the lowest eigenvalue via \texttt{subset\_by\_index=[0,0]}
+provides an additional $\approx 2$--$13\%$ saving at
+$D \geq 924$; at $D \leq 512$ the saving reaches $\approx 30\%$ but
+lies within timing noise. Second, the leading finite-size correction
+to $E_0/N$ in open chains is a $1/N$ surface term: for the critical
+transverse-field Ising chain, a three-parameter fit recovers the exact
+bulk energy to $\approx 10^{-4}$ at $N_{\max} = 16$, and a
+four-parameter fit including the $N^{-3}$ term reduces the
+extrapolation error to $\approx 6.3\times10^{-6}$. Restricting to the
+$P = +1$ parity sector gives $1.9$--$3.8\times$ speedups. Third,
+half-chain entanglement entropies of the Heisenberg chain show a
+pronounced $N \bmod 4$ dependence; single-branch fits on three or
+four points give effective central charges that differ by a factor of
+three between the two branches. Data and scripts are openly
+available.
+}
+
+\keywords{Exact diagonalization; Quantum spin chains; Lanczos method;
+Finite-size scaling; Symmetry reduction; Entanglement entropy}
+
+\maketitle
+
+% =========================================================================
+\section{Introduction}
+\label{sec:intro}
+
+Exact diagonalization (ED) is the reference method for small quantum
+many-body systems. It produces eigenvalues and eigenvectors of a
+finite-size Hamiltonian without variational or stochastic
+approximation, and serves as a validation baseline for tensor-network
+and quantum-Monte-Carlo codes. Its limitation is the exponential
+growth of the Hilbert-space dimension. General introductions are
+given in Sandvik's review~\cite{Sandvik2010}; mature packages such as
+QuSpin~\cite{Weinberg2017} exist, and tensor-network alternatives are
+reviewed in Ref.~\cite{Schollwock2011}.
+
+Despite this maturity, several practical questions inside an ED
+implementation are often answered by convention rather than by
+measurement. We focus on three.
+
+\emph{Dense versus sparse eigensolvers.} Dense diagonalization via
+\texttt{numpy.linalg.eigvalsh} (LAPACK) computes the full spectrum at
+cost $\mathcal{O}(D^3)$ in time and $\mathcal{O}(D^2)$ in memory. The
+implicitly restarted Lanczos method of ARPACK, exposed through
+\texttt{scipy.sparse.linalg.eigsh}~\cite{Lehoucq1998}, computes only
+$k$ extremal eigenvalues at cost $K$ matrix-vector products of
+$\mathcal{O}(\mathrm{nnz})$ each. The two are not, strictly speaking,
+interchangeable---one returns the entire spectrum, whereas the other
+targets only a small number of extremal eigenvalues. Nevertheless,
+in practical ED workflows a dense diagonalization is sometimes used
+when only the ground-state energy is ultimately required. We
+therefore benchmark this workflow explicitly, while treating the
+resulting dense-to-sparse ratios as workflow speedups rather than as
+intrinsic solver speed ratios.
+
+\emph{Finite-size extrapolation.} The appropriate fit variable
+depends on boundary conditions. For open chains the chain ends
+contribute a surface energy that makes the leading correction to
+$E_0/N$ of order $1/N$; for periodic chains the leading correction is
+of order $1/N^{2}$. The two ans\"atze are not interchangeable.
+
+\emph{Symmetry reduction.} Its benefit is obvious in principle but
+rarely quantified as a function of system size, nor separated from
+its effect on solver convergence.
+
+This is a benchmarking study. Its contribution is to replace
+inherited conventions by measured values, with their uncertainties
+and limitations stated explicitly. The implementation, raw data, and
+figure scripts are available at
+\url{https://github.com/sswaid991-bit/ed-spin-chains}.
+
+% =========================================================================
+\section{Models and methods}
+\label{sec:methods}
+
+\subsection{Models and conventions}
+\label{sec:models}
+
+We consider two spin-$1/2$ chains with open boundary conditions
+(OBC). All Hamiltonians use Pauli matrices.
+
+\paragraph{Transverse-field Ising (TFI) chain.}
+\begin{equation}
+H_{\mathrm{TFI}} = -J \sum_{i=1}^{N-1} \sigma^z_i \sigma^z_{i+1}
+                  - h \sum_{i=1}^{N} \sigma^x_i ,
+\label{eq:tfi}
+\end{equation}
+at the critical point $h = J = 1$. The model conserves neither $S^z$
+nor $S^x$, so the full $2^N$-dimensional space is used unless the
+parity sector is invoked. The bulk energy per site is
+$E_0/N \to -4/\pi$; the open-chain ground-state energy has the closed
+form~\cite{Pfeuty1970}
+\begin{equation}
+E_0(N) = 1 - \frac{1}{\sin\!\left(\frac{\pi}{4N+2}\right)},
+\label{eq:tfi-closed}
+\end{equation}
+which we use as an independent check throughout.
+
+\paragraph{Heisenberg antiferromagnet.}
+\begin{equation}
+H_{\mathrm{XXZ}} = \sum_{i=1}^{N-1}
+  \left( \sigma^x_i \sigma^x_{i+1}
+       + \sigma^y_i \sigma^y_{i+1}
+       + \Delta\, \sigma^z_i \sigma^z_{i+1} \right),
+\label{eq:xxz}
+\end{equation}
+at $\Delta = 1$, in the $S^z=0$ sector of dimension
+$D_{S^z} = \binom{N}{N/2}$. In the Pauli convention
+\begin{equation}
+H = \sum_{i=1}^{N-1} \vec\sigma_i \cdot \vec\sigma_{i+1}
+  = 4\sum_{i=1}^{N-1} \vec S_i \cdot \vec S_{i+1},
+\label{eq:heis-convention}
+\end{equation}
+so the bulk energy per site is
+\begin{equation}
+\epsilon_\infty^{\mathrm{Heis}} = 1 - 4\ln 2 \approx -1.77259,
+\label{eq:heis-limit}
+\end{equation}
+four times the more familiar $-(\ln 2 - 1/4) \approx -0.4431$ of the
+spin-exchange convention~\cite{Hulthen1938}. Data for $\Delta = 0.5$
+and $2.0$ are given in Appendix~\ref{app:xxz}.
+
+\subsection{Implementation}
+\label{sec:impl}
+
+The implementation is a single Python module of under 600 lines using
+only NumPy and SciPy. Basis states are integers
+$s = \sum_i s_i 2^i$ with $s_i \in \{0,1\}$. The $S^z=0$ sector
+consists of all states with $N/2$ up spins. The Hamiltonian is built
+in Compressed Sparse Row (CSR) format. The stored number of nonzeros
+was verified against closed forms:
+$\mathrm{nnz} = (N+1)2^N$ for the TFI chain and
+$\mathrm{nnz} = (N/2+1) D_{S^z}$ for the Heisenberg chain, exact in
+all six cases tested ($N=4,6,8,10,12,14$ for Heisenberg).
+
+Dense diagonalization uses \texttt{numpy.linalg.eigvalsh}
+(eigenvalues only). The sparse solver is the implicitly restarted
+Lanczos method implemented by \texttt{scipy.sparse.linalg.eigsh}
+through ARPACK, with $k=1$, \texttt{which='SA'}, a fixed-seed normal
+starting vector \texttt{v0}, and \texttt{tol=0} (which instructs
+ARPACK to use the machine-precision bound on the residual) unless
+stated otherwise. A fixed \texttt{v0} makes the number of Lanczos
+iterations reproducible. Matrix-vector products are counted by
+wrapping the matrix in a \texttt{LinearOperator}.
+
+\subsection{Timing protocol}
+\label{sec:timing-protocol}
+
+All timings are wall-clock \texttt{time.perf\_counter} measurements
+of the solver call only (matrix construction excluded) and are
+reported as the \emph{minimum} over $n$ repetitions, following the
+\texttt{timeit} convention, with $n=20$ for $D \le 1024$, $n=10$ for
+$1024 < D \le 2048$, and $n=5$ for $D > 2048$. One untimed warm-up
+call precedes the timed repetitions. The eigenvalues, sector
+dimensions, and Lanczos iteration counts reported here are
+reproducible to within floating-point rounding, given the same
+library versions and starting vector; wall-clock times depend on the
+machine and on the session.
+
+The environment is a single CPU core on a Windows~11 laptop
+(Intel Core i7-class processor, 4 physical cores, 16~GB RAM, AVX2
+and FMA3 but no AVX512) with Python~3.11, NumPy~1.24.3, and
+SciPy~1.15.3. Both OpenBLAS thread pools loaded at runtime (NumPy's
+\texttt{libopenblas64} and SciPy's \texttt{libscipy\_openblas}) were
+confirmed with \texttt{threadpoolctl} to run with a single thread;
+because environment-variable conventions are not honored uniformly
+across OpenBLAS builds, we additionally enforce single-threaded
+execution at runtime via \texttt{threadpoolctl.threadpool\_limits(1)}.
+The exact library files and OpenBLAS versions are recorded in the
+session log archived with this paper. We make no claim about other
+hardware: the numerical ratios are specific to this configuration,
+and the qualitative conclusions are the only part we expect to be
+general.
+
+All timing tables in this paper cite a single logged calibration
+session on the same machine, with single-threaded BLAS enforced.
+Within that session, repeated invocations of the same dense
+computation at $D=4096$ are reproducible to $1$--$3\%$ and repeated
+invocations of the sparse solver to $10$--$25\%$. The larger
+relative scatter in the sparse timings reflects their small absolute
+magnitude ($\sim 20$~ms at $D=4096$), where Python and ARPACK
+overhead is a significant fraction of the total. These figures
+characterize short-term reproducibility within one measurement
+session; variation across sessions, thermal loads, and background
+processes was not characterized and may be larger.
+
+\subsection{Dense solvers and library dependence}
+\label{sec:libraries}
+
+Two numerically equivalent dense eigenvalue routines are in common
+use: \texttt{numpy.linalg.eigvalsh} and \texttt{scipy.linalg.eigvalsh}.
+Both bind to LAPACK but link against different OpenBLAS builds
+(see the \texttt{threadpool\_info} entries in the session log
+archived with this paper for the exact library files). On the same
+matrices, with single-threaded BLAS, we measured:
+
+\begin{itemize}
+  \item At $D \geq 1024$, \texttt{scipy.linalg.eigvalsh} is
+        $2.0$--$2.5$ times faster than \texttt{numpy.linalg.eigvalsh}
+        (Table~\ref{tab:fair}), with the ratio reaching $2.26$ at
+        $D = 4096$ for the TFI chain and $2.43$ at $D = 3432$ for the
+        Heisenberg chain.
+  \item Below $D \approx 512$ the two calls are indistinguishable.
+  \item Restricting either call to the lowest eigenvalue via
+        \texttt{subset\_by\_index=[0,0]} (available only through
+        \texttt{scipy.linalg.eigvalsh}, driver \texttt{evr}) provides
+        an additional saving of $\approx 2$--$13\%$ at $D \geq 924$.
+        At $D \leq 512$ the saving reaches $\approx 30\%$, but the
+        absolute times there are a few milliseconds and the
+        percentage lies within the timing noise. The saving is small
+        at large $D$ because the tridiagonalization step, which
+        dominates the $\mathcal{O}(D^3)$ cost, is not avoided by the
+        subset request.
+\end{itemize}
+
+The dense workflow in this paper is \texttt{numpy.linalg.eigvalsh},
+which is the default choice in most ED codes. Users of
+\texttt{scipy.linalg.eigvalsh} should expect dense-to-sparse ratios
+roughly a factor of $2.3$ smaller at large $D$ than those reported
+here; the qualitative preference for sparse Lanczos is unaffected.
+We have not isolated the cause of the numpy/scipy difference; it is
+consistent with the two packages linking against OpenBLAS builds
+compiled with different optimization profiles, but this was not
+verified experimentally.
+
+\subsection{Fairness of the dense--sparse comparison}
+\label{sec:fairness}
+
+A caveat applies to every ratio in this paper. Dense
+\texttt{eigvalsh} computes \emph{all} eigenvalues while sparse
+\texttt{eigsh} computes only the ground state, so the two solvers are
+answering different questions. This asymmetry does not bias the
+comparison appreciably, as shown in Table~\ref{tab:fair}:
+restricting the dense computation to the lowest eigenvalue via
+LAPACK's MRRR driver reduces the dense runtime by $\approx 2$--$13\%$
+at $D \geq 924$ (and up to $\approx 30\%$ at $D \leq 512$, within
+timing noise), and does not change the qualitative preference for
+sparse Lanczos at any size tested. This is consistent with the
+tridiagonalization step, which dominates the $\mathcal{O}(D^{3})$
+cost, being unavoidable regardless of how many eigenvalues are
+requested. The reported speedups are therefore not an artifact of
+the dense solver computing more eigenvalues than necessary.
+
+% =========================================================================
+\section{Results}
+\label{sec:results}
+
+\subsection{Dense versus sparse diagonalization}
+\label{sec:timing}
+
+Table~\ref{tab:timing} lists minimum wall-clock times for the numpy
+dense baseline. Below $D \approx 70$ both solvers finish in about a
+millisecond and sparse is slower (ratio $0.1$--$0.3$), because fixed
+ARPACK and Python overhead dominates. At $D = 252$--$256$ sparse is
+already $2.1$--$2.4$ times faster. Interpolating $\ln(\text{ratio})$
+against $\ln D$ between the bracketing points gives a break-even at
+$D \approx 1.9\times10^{2}$ (TFI) and $D \approx 1.5\times10^{2}$
+(Heisenberg), which we quote as $D \approx 2\times10^{2}$---a
+working midpoint rather than a precise determination
+(Fig.~\ref{fig:crossover}). A factor of ten in favor of sparse is
+reached near $D \approx 5\times10^{2}$, and the ratio is
+$\approx 4\times10^{1}$ at $D \approx 10^{3}$.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Minimum wall-clock time (s) for the ground-state energy.
+Dense: \texttt{numpy.linalg.eigvalsh}; sparse:
+\texttt{scipy.sparse.linalg.eigsh}, $k=1$, \texttt{which='SA'},
+\texttt{tol=0}, fixed-seed \texttt{v0}. Repetitions: $n=20$ for
+$D \le 1024$, $n=10$ for $1024 < D \le 2048$, and $n=5$ for
+$D > 2048$. A dash means the dense calculation was not attempted.
+The ratio is $t_{\mathrm{dense}}/t_{\mathrm{sparse}}$. Values below
+$0.001$~s are dominated by the system clock resolution. All values
+from session \texttt{20261007\_070101}.}
+\label{tab:timing}
+\begin{tabular}{lrrrrr}
+\toprule
+Model & $N$ & $D$ & $t_{\text{dense}}$ & $t_{\text{sparse}}$ & ratio \\
+\midrule
+\multicolumn{6}{l}{\textit{Heisenberg ($S^z = 0$ sector)}} \\
+Heis & 4  & 6     & $<0.001$ & $<0.001$ & --- \\
+Heis & 6  & 20    & $<0.001$ & $<0.001$ & --- \\
+Heis & 8  & 70    & $<0.001$ & $0.0011$ & $0.3$ \\
+Heis & 10 & 252   & $0.0039$ & $0.0017$ & $2.4$ \\
+Heis & 12 & 924   & $0.142$  & $0.0033$ & $4.3\times10^{1}$ \\
+Heis & 14 & 3432  & $15.29$  & $0.0152$ & $1.0\times10^{3}$ \\
+Heis & 16 & 12870 & ---      & $0.0581$ & --- \\
+\multicolumn{6}{l}{\textit{Transverse-field Ising (full $2^N$ space)}} \\
+TFI  & 4  & 16    & $<0.001$ & $<0.001$ & --- \\
+TFI  & 6  & 64    & $<0.001$ & $0.0019$ & $0.2$ \\
+TFI  & 8  & 256   & $0.0072$ & $0.0033$ & $2.2$ \\
+TFI  & 10 & 1024  & $0.289$  & $0.0055$ & $5.2\times10^{1}$ \\
+TFI  & 11 & 2048  & $3.26$   & $0.0095$ & $3.4\times10^{2}$ \\
+TFI  & 12 & 4096  & $27.55$  & $0.0240$ & $1.1\times10^{3}$ \\
+TFI  & 14 & 16384 & ---      & $0.132$  & --- \\
+TFI  & 16 & 65536 & ---      & $0.818$  & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\safeincludegraphics[width=0.85\textwidth]{Fig1_crossover.pdf}
+\caption{Minimum wall-clock time for the ground-state calculation as a
+function of Hilbert-space dimension $D$. The break-even occurs near
+$D \approx 2\times10^{2}$. The dense and sparse solvers are not
+strictly equivalent: dense returns the full spectrum while sparse
+returns only the ground state (see Sec.~\ref{sec:fairness}).}
+\label{fig:crossover}
+\end{figure}
+
+\paragraph{Dense solvers across libraries.}
+Table~\ref{tab:fair} lists the same dense calculation performed by
+three workflows: \texttt{numpy.linalg.eigvalsh} (full spectrum),
+\texttt{scipy.linalg.eigvalsh} (full spectrum), and
+\texttt{scipy.linalg.eigvalsh} with \texttt{subset\_by\_index=[0,0]}.
+The difference between the two libraries is a factor of
+$2.0$--$2.5$ at $D \geq 1024$; the additional saving from restricting
+to the lowest eigenvalue is $\approx 2$--$13\%$ at $D \geq 924$, and
+up to $\approx 30\%$ at smaller $D$ where the absolute times are in
+the millisecond range and the percentages lie within timing noise.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Dense solvers on the same matrices, single-threaded BLAS,
+minimum of $n$ repetitions after one untimed warm-up. All values from
+session \texttt{20261007\_070101}. All times in seconds.}
+\label{tab:fair}
+\begin{tabular}{lrrrrr}
+\toprule
+$N$ & $D$ & $t_{\text{numpy}}$ & $t_{\text{scipy}}$
+    & $t_{\text{scipy,subset}}$ & $t_{\text{numpy}}/t_{\text{scipy}}$ \\
+\midrule
+\multicolumn{6}{l}{\textit{Transverse-field Ising}} \\
+8  & 256   & $0.0057$ & $0.0045$ & $0.0023$ & $1.27$ \\
+10 & 1024  & $0.220$  & $0.107$  & $0.101$  & $2.06$ \\
+12 & 4096  & $27.86$  & $12.32$  & $12.10$  & $2.26$ \\
+\multicolumn{6}{l}{\textit{Heisenberg ($S^z = 0$)}} \\
+10 & 252   & $0.0046$ & $0.0039$ & $0.0028$ & $1.18$ \\
+12 & 924   & $0.118$  & $0.0718$ & $0.0589$ & $1.64$ \\
+14 & 3432  & $15.27$  & $6.274$  & $6.126$  & $2.43$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Cost model and measured iteration counts.}
+Dense \texttt{eigvalsh} is dominated by tridiagonalization,
+$\approx\tfrac43 D^3$ floating-point operations: $9.2\times10^{10}$
+at $D = 4096$, which in $27.6$~s corresponds to $\approx 3.3$~GFLOP/s
+on one core. For sparse Lanczos the cost is $K$ matrix-vector
+products of $\mathcal{O}(\mathrm{nnz})$ each, plus the
+reorthogonalization work of ARPACK, so the cost scales as
+$K \cdot \mathrm{nnz} \propto K N D$. Table~\ref{tab:matvec} gives
+the measured $K$ for the TFI chain.
+
+A commonly assumed value $K \approx 30$ underestimates the measured
+counts by $2$--$5\times$; the measured values increase with $N$ over
+the range tested. The observed growth is compatible with the
+heuristic estimate $K \sim \sqrt{W/\Delta}$ given a bandwidth
+$W \propto N$ and a gap $\Delta \propto 1/N$, but we do not claim
+this relation as a fitted scaling law; the measured $K$ values
+increase in steps of about $10$ because ARPACK checks convergence
+only at restarts. Relaxing \texttt{tol} from its tightest setting to
+$10^{-10}$ removes $\approx 20$--$40$ iterations and shortens the
+runtime by $20$--$40\%$ at every size.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Lanczos matrix-vector counts $K$ and minimum solver times
+(s) for the critical TFI chain at two tolerances. The last column is
+$t_{\min}/(K\,\mathrm{nnz})$ in nanoseconds. $K$ values are
+deterministic given the fixed \texttt{v0} and reproduce exactly
+across sessions. All values from session \texttt{20261007\_070101}.}
+\label{tab:matvec}
+\begin{tabular}{rrrrrrrr}
+\toprule
+$N$ & $D$ & nnz & $K(0)$ & $K(10^{-10})$ & $t(0)$ & $t(10^{-10})$ & ns/($K$\,nnz) \\
+\midrule
+8  & 256   & 2304    & 71  & 51  & $0.0026$ & $0.0018$ & $16.1$ \\
+10 & 1024  & 11264   & 91  & 71  & $0.0080$ & $0.0047$ & $7.8$ \\
+12 & 4096  & 53248   & 101 & 71  & $0.0202$ & $0.0134$ & $3.8$ \\
+14 & 16384 & 245760  & 121 & 91  & $0.0865$ & $0.0697$ & $2.9$ \\
+16 & 65536 & 1114112 & 141 & 101 & $0.7836$ & $0.6054$ & $5.0$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+With $K = 101$ and $\mathrm{nnz} = 5.3\times10^{4}$ at $D = 4096$,
+the nominal dense tridiagonalization count is approximately
+$9.2\times10^{10}$ floating-point operations, whereas the sparse
+matvec count is only of order $K\,\mathrm{nnz} \simeq 5.4\times10^{6}$
+sparse matrix entries processed. This comparison is only an
+order-of-magnitude cost model: sparse matrix-vector products perform
+a different mix of floating-point operations and memory accesses, and
+ARPACK also incurs vector orthogonalization and restart overhead. The
+measured speedup is therefore substantially smaller than the ratio of
+these nominal operation counts.
+
+\subsection{Numerical precision}
+\label{sec:precision}
+
+Table~\ref{tab:precision} compares the dense and sparse ground-state
+energies and gives the Lanczos residual for the Heisenberg chain
+($N \le 16$; larger sizes have no dense reference).
+
+\begin{table}[t]
+\centering
+\small
+\caption{Agreement between dense and sparse eigensolvers for the
+Heisenberg chain. The relative error is
+$|E_0^{\text{dense}} - E_0^{\text{sparse}}| / |E_0^{\text{dense}}|$.
+The dense and sparse implementations agree with each other; they are
+not compared against an exact mathematical reference.}
+\label{tab:precision}
+\begin{tabular}{rrrrr}
+\toprule
+$N$ & $D$ & $|E_0^{\text{dense}} - E_0^{\text{sparse}}|$
+    & relative error & $\|H\psi_0 - E_0\psi_0\|$ \\
+\midrule
+4  & 6     & $1.8 \times 10^{-15}$ & $2.7 \times 10^{-16}$ & $2.4 \times 10^{-15}$ \\
+6  & 20    & $5.3 \times 10^{-15}$ & $5.3 \times 10^{-16}$ & $8.0 \times 10^{-15}$ \\
+8  & 70    & $1.1 \times 10^{-14}$ & $7.9 \times 10^{-16}$ & $1.5 \times 10^{-14}$ \\
+10 & 252   & $1.8 \times 10^{-14}$ & $1.0 \times 10^{-15}$ & $1.0 \times 10^{-14}$ \\
+12 & 924   & $3.2 \times 10^{-14}$ & $1.6 \times 10^{-15}$ & $1.4 \times 10^{-14}$ \\
+14 & 3432  & $1.2 \times 10^{-13}$ & $5.2 \times 10^{-15}$ & $3.3 \times 10^{-14}$ \\
+16 & 12870 & $9.6 \times 10^{-14}$ & $3.5 \times 10^{-15}$ & $2.2 \times 10^{-14}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The two solvers agree with each other to a relative accuracy at or
+below $5 \times 10^{-15}$, i.e.\ a few units of machine epsilon, and
+the residual norms are $\lesssim 3.3 \times 10^{-14}$. For the tested
+Heisenberg sizes, the choice of solver therefore has no measurable
+effect on the reported ground-state energy. For a Hermitian matrix,
+the residual provides a direct a posteriori bound on the distance
+between an approximate eigenvalue and the spectrum: for a normalized
+vector $\psi$ and $r = H\psi - \tilde E\psi$, there exists an exact
+eigenvalue $\lambda$ such that
+\begin{equation}
+|\lambda - \tilde E| \le \|r\|.
+\label{eq:hermitian-bound}
+\end{equation}
+
+\subsection{Symmetry-sector reduction}
+\label{sec:symmetry}
+
+\paragraph{Burnside counting for the Heisenberg chain.}
+Beyond $S^z$, the open Heisenberg chain commutes with spatial
+reflection $R$ and global spin flip $P$. For the even-$N$ chains
+studied here, the ground state lies in the sector
+$P = R = (-1)^{N/2}$, placing it in the $(+,+)$ sector for
+$N \equiv 0 \pmod 4$ and in $(-,-)$ for $N \equiv 2 \pmod 4$. The
+symmetry assignment is consistent with Marshall's sign
+rule~\cite{Marshall1955,LiebMattis1962}.
+
+Burnside's lemma for $\mathbb{Z}_2\times\mathbb{Z}_2$ gives
+\begin{equation}
+D_{(+,+)} = \tfrac14\left[
+  D_{S^z} + \mathrm{tr}(R) + \mathrm{tr}(RP) \right],
+\label{eq:burnside}
+\end{equation}
+because $\mathrm{tr}(P) = 0$ in the $S^z=0$ sector, with
+$\mathrm{tr}(R) = \binom{N/2}{N/4}$ for $N/2$ even and $0$ for $N/2$
+odd, and $\mathrm{tr}(RP) = 2^{N/2}$.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Heisenberg-chain sector dimensions. Last two columns:
+reduction relative to the full space and to the $S^z=0$ sector.}
+\label{tab:symmetry}
+\begin{tabular}{rrrrrr}
+\toprule
+$N$ & $D_{\text{full}}$ & $D_{S^z}$ & $D_{(+,+)}$
+    & $D_{\text{full}}/D_{(+,+)}$ & $D_{S^z}/D_{(+,+)}$ \\
+\midrule
+4  & 16    & 6     & 3    & 5.33  & 2.00 \\
+6  & 64    & 20    & 7    & 9.14  & 2.86 \\
+8  & 256   & 70    & 23   & 11.13 & 3.04 \\
+10 & 1024  & 252   & 71   & 14.42 & 3.55 \\
+12 & 4096  & 924   & 252  & 16.25 & 3.67 \\
+14 & 16384 & 3432  & 890  & 18.41 & 3.86 \\
+16 & 65536 & 12870 & 3299 & 19.87 & 3.90 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The factor $D_{S^z}/D_{(+,+)}$ rises from $2.0$ at $N=4$ to $3.90$ at
+$N=16$ and tends to $4$ from below (Fig.~\ref{fig:hilbert}).
+
+\begin{figure}[t]
+\centering
+\safeincludegraphics[width=0.85\textwidth]{Fig2_hilbert_scaling.pdf}
+\caption{Hilbert-space dimension versus $N$ for the full space, the
+$S^z=0$ sector, and the combined $S^z, R, P$ sector.}
+\label{fig:hilbert}
+\end{figure}
+
+\paragraph{Parity sector of the TFI chain.}
+$H_{\mathrm{TFI}}$ commutes with $P = \prod_i \sigma^x_i$. By
+Perron--Frobenius, the ground state is unique with positive
+amplitudes and hence $P=+1$. The $P=+1$ sector has dimension
+$2^{N-1}$.
+
+Table~\ref{tab:tfi-parity} shows that the reduced Hamiltonian
+reproduces Eq.~\eqref{eq:tfi-closed} with maximum absolute deviation
+$4.6 \times 10^{-14}$ for $N = 12$--$18$, i.e.\ to machine precision.
+
+\begin{table}[t]
+\centering
+\small
+\caption{TFI ground-state energy in the $P=+1$ sector versus the
+closed form, Eq.~\eqref{eq:tfi-closed}.}
+\label{tab:tfi-parity}
+\begin{tabular}{rrrr}
+\toprule
+$N$ & $D_{P=+1}$ & $E_0$ (numerical) & $|E_0^{\mathrm{num}} - E_0^{\mathrm{cf}}|$ \\
+\midrule
+12 & 2048   & $-14.925971110$ & $4.6\times10^{-14}$ \\
+14 & 8192   & $-17.471004055$ & $0$ \\
+16 & 32768  & $-20.016387900$ & $2.1\times10^{-14}$ \\
+17 & 65536  & $-21.289173773$ & $4.3\times10^{-14}$ \\
+18 & 131072 & $-22.562008725$ & $2.5\times10^{-14}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:K-parity} reports the Lanczos iteration count in both
+parity sectors; the iteration counts are deterministic given the
+fixed starting vector and can be reproduced on any machine with the
+same library versions. Table~\ref{tab:parity-timing} reports the
+wall-clock comparison between the full space and the $P=+1$ sector
+measured in the same logged session as the other timing tables.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Lanczos iteration count for the TFI chain in the two parity
+sectors (minimum over 10 repetitions). $K$ values are deterministic
+given the fixed \texttt{v0}.}
+\label{tab:K-parity}
+\begin{tabular}{rrrr}
+\toprule
+$N$ & $D_{P=+1}$ & $K_{P=+1}$ & $K_{P=-1}$ \\
+\midrule
+10 & 512   & 71  & 71  \\
+12 & 2048  & 81  & 91  \\
+14 & 8192  & 91  & 101 \\
+16 & 32768 & 111 & 121 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\small
+\caption{TFI chain, full space versus $P=+1$ sector. Measured in the
+same logged session as the other timing tables. Minimum of 10; times
+in seconds.}
+\label{tab:parity-timing}
+\begin{tabular}{rrrrrrr}
+\toprule
+$N$ & $D_{\mathrm{full}}$ & $D_{P=+1}$ & $t_{\mathrm{full}}$ & $t_{P=+1}$ & ratio & $K_{\mathrm{full}}/K_{P=+1}$ \\
+\midrule
+10 & 1024  & 512   & $0.0053$ & $0.0028$ & $1.89$ & 91/71 \\
+12 & 4096  & 2048  & $0.0167$ & $0.0082$ & $2.05$ & 101/81 \\
+14 & 16384 & 8192  & $0.0805$ & $0.0306$ & $2.63$ & 121/91 \\
+16 & 65536 & 32768 & $0.7200$ & $0.1908$ & $3.77$ & 141/111 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\safeincludegraphics[width=0.85\textwidth]{Fig4_tfi_parity.pdf}
+\caption{TFI chain in the full space and in the $P=+1$ sector:
+Hilbert-space dimension and ground-state wall-clock time versus $N$.}
+\label{fig:parity}
+\end{figure}
+
+The parity speedup is $1.9$--$3.8\times$. Halving $D$ alone would
+give $2\times$; the product of the dimension ratio and the iteration
+ratio $K_{\mathrm{full}}/K_{\mathrm{par}}$ predicts $1.3$, $1.2$,
+$1.3$, $1.3$ for $N=10,12,14,16$. The measured ratios exceed these
+predictions because the smaller matrix also fits more efficiently in
+the cache, an effect not captured by the iteration-count model.
+
+\subsection{Finite-size convergence}
+\label{sec:convergence}
+
+\paragraph{Open-chain expansion and the exact TFI case.}
+For open chains
+\begin{equation}
+E_0(N) = N\epsilon_\infty + \sigma + \mathcal{O}(1/N),\qquad
+\frac{E_0}{N} = \epsilon_\infty + \frac{\sigma}{N} + \mathcal{O}(1/N^2),
+\label{eq:obc-expansion}
+\end{equation}
+with $\sigma$ the surface energy. For the critical TFI chain,
+expanding Eq.~\eqref{eq:tfi-closed} gives
+\begin{equation}
+\frac{E_0}{N} = -\frac4\pi + \frac{1-2/\pi}{N} - \frac{\pi}{24N^2}
+  + \frac{\pi}{48N^3}
+  - \Bigl(\frac{\pi}{96} + \frac{7\pi^3}{23040}\Bigr)\frac{1}{N^4}
+  + \mathcal{O}(N^{-5}),
+\label{eq:tfi-expansion}
+\end{equation}
+so $\sigma_{\mathrm{TFI}} = 1-2/\pi \approx 0.36338$. The $N^{-2}$
+coefficient equals $-\pi c v/24$ with $c=1/2$ and $v=2$ (Pauli
+normalization), the open-boundary conformal-field-theory
+form~\cite{Cardy1984}.
+
+\begin{table}[t]
+\centering
+\small
+\caption{TFI surface energy. $g(N) = (E_0/N-\epsilon_\infty) N$
+approaches $\sigma_{\mathrm{TFI}} = 1-2/\pi$ from below; the residual
+is the difference between $g(N)$ and $\sigma-\pi/(24N)$.}
+\label{tab:surface}
+\begin{tabular}{rrrrr}
+\toprule
+$N$ & $E_0/N$ & $g(N)$ & $\sigma - \pi/(24N)$ & residual \\
+\midrule
+4  & $-1.189693$ & $0.33419$ & $0.33065$ & $0.00354$ \\
+6  & $-1.216038$ & $0.34321$ & $0.34156$ & $0.00165$ \\
+8  & $-1.229744$ & $0.34796$ & $0.34702$ & $0.00094$ \\
+10 & $-1.238149$ & $0.35091$ & $0.35029$ & $0.00062$ \\
+12 & $-1.243831$ & $0.35290$ & $0.35247$ & $0.00043$ \\
+14 & $-1.247929$ & $0.35435$ & $0.35404$ & $0.00031$ \\
+16 & $-1.251024$ & $0.35544$ & $0.35520$ & $0.00024$ \\
+$\infty$ & $-4/\pi$ & $0.36338$ & $0.36338$ & $0$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Extrapolation.}
+Table~\ref{tab:extrap} compares four least-squares fits. At
+$N_{\max} = 16$ the three-parameter OBC error is
+$9.8\times10^{-5}$, the two-parameter PBC error is
+$1.8\times10^{-2}$, and adding the $N^{-3}$ term reduces the OBC
+error to $6.3\times10^{-6}$, a factor of $15$. The PBC form gives a
+relative extrapolation error of $1.8\%$ because it lacks the surface
+term altogether (Fig.~\ref{fig:extrap}).
+
+\begin{table}[t]
+\centering
+\small
+\caption{Relative error of the extrapolated bulk energy for the
+critical TFI chain. The tabulated error is the extrapolation error to
+$N=\infty$, not a fit residual. The four-parameter fit is not shown
+at $N_{\max}=8$ because three data points do not constrain four
+parameters.}
+\label{tab:extrap}
+\begin{tabular}{rrrrrr}
+\toprule
+$N_{\max}$ & points & 2-param OBC & 3-param OBC & 4-param OBC & 2-param PBC \\
+\midrule
+8  & 3 & $2.88\times10^{-3}$ & $1.94\times10^{-4}$ & ---                 & $2.51\times10^{-2}$ \\
+10 & 4 & $2.44\times10^{-3}$ & $1.56\times10^{-4}$ & $1.12\times10^{-5}$ & $2.27\times10^{-2}$ \\
+12 & 5 & $2.13\times10^{-3}$ & $1.31\times10^{-4}$ & $8.95\times10^{-6}$ & $2.09\times10^{-2}$ \\
+14 & 6 & $1.89\times10^{-3}$ & $1.12\times10^{-4}$ & $7.40\times10^{-6}$ & $1.94\times10^{-2}$ \\
+16 & 7 & $1.70\times10^{-3}$ & $9.77\times10^{-5}$ & $6.27\times10^{-6}$ & $1.81\times10^{-2}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The three-parameter errors decrease only slowly with $N_{\max}$
+because Eq.~\eqref{eq:tfi-expansion} contains a $+\pi/(48N^3)$ term
+that the fit omits. A four-parameter fit including this term reduces
+the extrapolation error at $N_{\max} = 16$ from $9.8\times10^{-5}$ to
+$6.3\times10^{-6}$ (Table~\ref{tab:extrap}), a consistency check
+rather than an independently achieved accuracy, because the added
+term was predicted by the same analytic expansion under test. The
+fitted $N^{-3}$ coefficient is $0.046$, about $30\%$ below the
+analytic value $\pi/48 \approx 0.065$. Equation~\eqref{eq:tfi-expansion}
+gives a negative $N^{-4}$ coefficient
+$-\pi/96 - 7\pi^3/23040 \approx -0.042$; a truncated fit omitting
+this term would tend to underestimate the $N^{-3}$ coefficient.
+Pinning the $N^{-4}$ coefficient at its analytic value and refitting
+the remaining terms raises the inferred $N^{-3}$ coefficient to
+$\approx 0.071$. The free and pinned estimates therefore bracket
+$\pi/48$ from below and above. The two together confirm that the
+analytic expansion is consistent with the data, but the available
+system sizes do not resolve the $N^{-3}$ coefficient to better than
+about $30\%$. The three-parameter fit also biases the fitted
+parameters (Table~\ref{tab:fitparams}): at $N_{\max} = 16$ it gives
+$\sigma = 0.3602$ ($0.9\%$ below $0.36338$) and $\gamma = -0.1061$
+($19\%$ smaller in magnitude than $-\pi/24 = -0.1309$).
+
+\begin{table}[t]
+\centering
+\small
+\caption{Parameters of the three- and four-parameter OBC fits. Exact
+values: $\epsilon_\infty = -1.273240$, $\sigma = 0.363380$,
+$\gamma = -0.130900$, $\pi/48 = 0.065450$. The four-parameter column
+is not shown at $N_{\max}=8$ (underdetermined).}
+\label{tab:fitparams}
+\begin{tabular}{rrrrrr}
+\toprule
+$N_{\max}$ & points & $\epsilon_\infty$ (3p) & $\sigma$ (3p) & $\gamma$ (3p) & $\delta$ (4p) \\
+\midrule
+8  & 3 & $-1.272992$ & $0.358771$ & $-0.102295$ & --- \\
+10 & 4 & $-1.273040$ & $0.359295$ & $-0.103620$ & $0.04480$ \\
+12 & 5 & $-1.273073$ & $0.359676$ & $-0.104624$ & $0.04544$ \\
+14 & 6 & $-1.273097$ & $0.359966$ & $-0.105416$ & $0.04594$ \\
+16 & 7 & $-1.273115$ & $0.360196$ & $-0.106059$ & $0.04635$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\safeincludegraphics[width=0.85\textwidth]{Fig3_extrapolation.pdf}
+\caption{Extrapolation error versus the largest system size $N_{\max}$
+used in the fit.}
+\label{fig:extrap}
+\end{figure}
+
+\paragraph{Critical gap.}
+The TFI gap satisfies $N\,\Delta E = 2.778,\ 2.893,\ 2.953,\ 2.989,\
+3.014,\ 3.032,\ 3.045,\ 3.056$ for $N = 4,6,\dots,18$, approaching
+$\pi$ from below (Fig.~\ref{fig:gap}), consistent with
+$4\sin[\pi/(4N+2)]$.
+
+\begin{figure}[t]
+\centering
+\safeincludegraphics[width=0.85\textwidth]{Fig6_gap_convergence.pdf}
+\caption{Critical TFI gap multiplied by $N$ versus $N$; the limit is
+$\pi$. The prediction is $4\sin[\pi/(4N+2)] \cdot N$, the free-fermion
+single-particle gap.}
+\label{fig:gap}
+\end{figure}
+
+\paragraph{Heisenberg chain.}
+Table~\ref{tab:heis-surface} lists $E_0/N$ and
+$g(N) = (E_0/N-\epsilon_\infty) N$ for the Heisenberg chain with
+$\epsilon_\infty = 1 - 4\ln 2$. Two-point estimates of the
+coefficient of the $1/N$ correction from $(4,8)$, $(8,12)$, $(12,16)$
+give $\gamma \approx -0.44$, $-0.52$, and $-0.56$. The isotropic
+Heisenberg chain contains logarithmic finite-size corrections from
+the marginally irrelevant operator at the SU(2)-symmetric
+point~\cite{Affleck1989}, so a fit involving a surface term,
+subleading powers of $1/N$, and logarithmic corrections is not well
+constrained by these sizes. We therefore do not quote a Heisenberg
+surface energy.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Heisenberg energy per site,
+$\epsilon_\infty = 1 - 4\ln 2 \approx -1.772589$.}
+\label{tab:heis-surface}
+\begin{tabular}{rrr}
+\toprule
+$N$ & $E_0/N$ & $(E_0/N-\epsilon_\infty)N$ \\
+\midrule
+4  & $-1.616025$ & $0.626253$ \\
+6  & $-1.662385$ & $0.661224$ \\
+8  & $-1.687466$ & $0.680979$ \\
+10 & $-1.703214$ & $0.693746$ \\
+12 & $-1.714030$ & $0.702702$ \\
+14 & $-1.721921$ & $0.709343$ \\
+16 & $-1.727934$ & $0.714471$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Entanglement entropy and central charge}
+\label{sec:entropy}
+
+The half-chain entropy of the Heisenberg ground state is computed
+from the singular values of the ground-state vector reshaped into a
+$2^{N/2} \times 2^{N/2}$ matrix,
+$S = -\sum_i \sigma_i^2 \ln \sigma_i^2$, and is compared with the
+open-chain form $S \simeq (c/6)\ln N + \mathrm{const}$
+\cite{Calabrese2004}. Table~\ref{tab:entropy} shows a strong even-odd
+structure in $\ell = N/2$ (Fig.~\ref{fig:ent}). Such alternating
+contributions in open critical chains are
+known~\cite{Laflorencie2006}.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Half-chain entropy (natural logarithm) of the Heisenberg
+chain for even $N$.}
+\label{tab:entropy}
+\begin{tabular}{rrr}
+\toprule
+$N$ & $N \bmod 4$ & $S$ \\
+\midrule
+4  & 0 & $0.319368$ \\
+6  & 2 & $0.711373$ \\
+8  & 0 & $0.456976$ \\
+10 & 2 & $0.737869$ \\
+12 & 0 & $0.536833$ \\
+14 & 2 & $0.762250$ \\
+16 & 0 & $0.592307$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+A linear fit of $S$ against $\ln N$ over the four
+$N \equiv 0 \pmod 4$ points gives slope $0.1971 \pm 0.0008$ and hence
+$c_{\mathrm{eff}} = 1.183 \pm 0.005$ against $c=1$. The formal
+uncertainty $\pm 0.005$ reflects only the scatter of the four points
+around the fitted line. The $N \equiv 2 \pmod 4$ branch (three points)
+gives a least-squares slope $0.059$, i.e.\ $c_{\mathrm{eff}} \approx
+0.36$. The two branches therefore yield effective central charges
+differing by a factor of three, and neither branch alone is a
+reliable estimator at these sizes.
+
+\begin{figure}[t]
+\centering
+\safeincludegraphics[width=0.85\textwidth]{Fig5_entanglement.pdf}
+\caption{Half-chain entanglement entropy of the Heisenberg chain
+versus $\ln N$. The parity effect splits the data into two branches.}
+\label{fig:ent}
+\end{figure}
+
+% =========================================================================
+\section{Discussion}
+\label{sec:discussion}
+
+\subsection{Recommendations}
+\label{sec:recs}
+
+For ground-state or few-state calculations, our measurements suggest
+that sparse Lanczos becomes preferable at $D$ somewhat above the
+measured break-even scale. The measured crossover is
+$D \approx 2\times10^{2}$ with the numpy baseline. Because
+\texttt{scipy.linalg.eigvalsh} is faster by a factor of $2.0$--$2.5$
+at large $D$, its crossover with the sparse solver would lie higher;
+this was not measured directly. We recommend a working threshold of
+$D \gtrsim 3\times10^{2}$, which is safe under either library choice.
+Dense diagonalization remains the natural choice when the full
+spectrum or all eigenvectors are needed, or for $D \lesssim 10^{2}$
+where the cost is negligible. The benefit becomes substantial where
+it matters: about $3.4\times10^{2}$ at $D \approx 2000$ and
+$1.1\times10^{3}$ at $D = 4096$ on our hardware, using the numpy
+dense baseline.
+
+A practical reduction in runtime is obtained by relaxing the Lanczos
+tolerance from the tightest ARPACK setting to \texttt{tol} $=
+10^{-10}$; in the tested TFI cases this reduced the runtime by
+$20$--$40\%$ while maintaining converged ground-state energies.
+
+For open chains the fit ansatz must contain the $1/N$ surface term;
+the TFI chain provides a free exact benchmark. Symmetry reduction by
+$S^z$ should always be applied; reflection and spin flip add a further
+factor approaching $4$ for a known ground-state sector, and the TFI
+parity sector gives a $1.9$--$3.8\times$ speedup. Central charges
+should not be extracted from a single $N \bmod 4$ branch of $S_{N/2}$
+at $N \le 16$.
+
+\subsection{Limitations}
+\label{sec:limitations}
+
+All timings come from one machine, one single-threaded BLAS build, and
+one SciPy/ARPACK version; the ratios quoted are specific to them. The
+calibration session was conducted on a single day; variation across
+days, thermal loads, and background processes was not measured and
+may be larger. The dense--sparse comparison is not strictly
+apples-to-apples, since the dense solver returns the entire spectrum
+while the sparse solver returns only the ground state; restricting
+the dense computation to the lowest eigenvalue changes the timing by
+$\approx 2$--$13\%$ at $D \geq 924$ (Table~\ref{tab:fair}), so the
+reported ratios are not appreciably biased by the spectral scope of
+the dense call. We did not benchmark against QuSpin or other
+established packages; the scope of this study is the behaviour of
+the default NumPy/SciPy ED workflow, and adding a packaged library
+would change the comparison to a different question. The reported
+hardware lacks AVX512, which affects the dense timings in
+particular; the effective numpy throughput at $D=4096$ is
+$3.3$~GFLOP/s, well below the peak of the processor. On a
+multi-threaded machine with AVX512 the dense baseline would be faster
+and the dense-to-sparse ratios correspondingly smaller. The purpose
+of the benchmark is not to establish universal hardware-independent
+crossover constants, but to quantify the scale of effects that can
+arise in a reproducible small-scale ED workflow.
+
+% =========================================================================
+\section{Conclusions}
+\label{sec:conclusions}
+
+\begin{enumerate}
+  \item For the single-threaded NumPy/SciPy implementation tested
+        here, the dense-to-sparse ground-state workflow crossover
+        occurs at $D \approx 2\times10^{2}$ with the
+        \texttt{numpy.linalg.eigvalsh} dense baseline. At
+        $D = 4096$ the workflow ratio is $\approx 1.1\times10^{3}$
+        with that baseline and $\approx 6.6\times10^{2}$ with
+        \texttt{scipy.linalg.eigvalsh}; the two libraries differ by
+        a factor of $2.3$ on the same matrix. Restricting the dense
+        call to the lowest eigenvalue provides an additional
+        $\approx 2$--$13\%$ saving at $D \geq 924$.
+
+  \item The measured Lanczos iteration counts, $K = 71$--$141$ for
+        $N = 8$--$16$, are substantially larger than a commonly
+        assumed value $K \approx 30$.
+
+  \item For the tested Heisenberg sizes, dense and sparse
+        ground-state energies agree to relative differences below
+        $5.2\times10^{-15}$, with sparse residual norms below
+        $3.3\times10^{-14}$.
+
+  \item For open chains, the leading finite-size correction to
+        $E_0/N$ is a surface term proportional to $1/N$. An
+        OBC-consistent three-parameter fit recovers the TFI bulk
+        energy to approximately $10^{-4}$ at $N_{\max} = 16$;
+        adding the $N^{-3}$ term predicted by the analytic
+        expansion reduces the fit residual to $6.3\times10^{-6}$.
+        This residual is a consistency check rather than an
+        independently achieved accuracy, because the added term is
+        predicted by the same analytic expansion under test. The
+        fitted coefficient is $30\%$ below $\pi/48$; pinning the
+        analytic $N^{-4}$ coefficient in the fit moves it to $9\%$
+        above, so the two estimates bracket the analytic value and
+        confirm the consistency of the expansion, but do not
+        resolve the $N^{-3}$ coefficient to better than about
+        $30\%$ at the available sizes.
+
+  \item Symmetry reduction provides a substantial reduction in the
+        Hilbert-space dimension. In the Heisenberg chain, restricting
+        to the appropriate $S^z$, reflection, and spin-flip sector
+        reduces the dimension by a factor growing from $5.3$ at
+        $N=4$ to $19.9$ at $N=16$. For the TFI chain, restriction to
+        the ground-state parity sector gives a factor-of-two
+        reduction in dimension and measured speedups of
+        $1.9$--$3.8\times$ in the tested range.
+
+  \item Half-chain entanglement entropies of the open Heisenberg
+        chain show a strong $N \bmod 4$ dependence at $N \le 16$.
+        Single-branch fits on three or four points give effective
+        central charges differing by a factor of three between the
+        two branches, demonstrating that neither branch alone is a
+        reliable estimator at these sizes.
+\end{enumerate}
+
+% =========================================================================
+\section*{Declarations}
+
+\subsection*{Funding}
+The authors received no specific funding for this work.
+
+\subsection*{Competing interests}
+The authors declare no competing interests.
+
+\subsection*{Ethics approval}
+Not applicable.
+
+\subsection*{Author contributions}
+S.S.\ designed the study, wrote the code, performed the numerical
+experiments, analyzed the data, and wrote the manuscript. M.I.J.\
+contributed to the analysis of the numerical results and to the
+revision of the manuscript. Both authors read and approved the final
+manuscript.
+
+\subsection*{Data availability}
+The Python module, benchmark scripts, raw CSV data, figure and table
+generators, and the log from the calibration session are available
+in the
+\href{https://github.com/sswaid991-bit/ed-spin-chains}{public
+repository}. The repository includes the logged session
+\texttt{20261007\_070101} with the exact library files and OpenBLAS
+versions in use, and the per-session CSVs for every table in this
+manuscript. Rerunning \texttt{reproduce.py} reproduces the full set
+of tables and figures in about 25 minutes on the reference laptop.
+
+% =========================================================================
+\begin{thebibliography}{99}
+
+\bibitem{Hulthen1938}
+L.~Hulth\'en, \"Uber das Austauschproblem eines Kristalles, Ark.\
+Mat.\ Astron.\ Fys.\ \textbf{26A}, 1 (1938)
+
+\bibitem{Pfeuty1970}
+P.~Pfeuty, The one-dimensional Ising model with a transverse field,
+Ann.\ Phys.\ \textbf{57}, 79 (1970).
+\href{https://doi.org/10.1016/0003-4916(70)90270-8}{https://doi.org/10.1016/0003-4916(70)90270-8}
+
+\bibitem{Sandvik2010}
+A.~W.~Sandvik, Computational studies of quantum spin systems, AIP
+Conf.\ Proc.\ \textbf{1297}, 135 (2010).
+\href{https://doi.org/10.1063/1.3518900}{https://doi.org/10.1063/1.3518900}
+
+\bibitem{Weinberg2017}
+P.~Weinberg, M.~Bukov, QuSpin: a Python package for dynamics and exact
+diagonalisation of quantum many-body systems, SciPost Phys.\
+\textbf{2}, 003 (2017).
+\href{https://doi.org/10.21468/SciPostPhys.2.1.003}{https://doi.org/10.21468/SciPostPhys.2.1.003}
+
+\bibitem{Schollwock2011}
+U.~Schollw\"ock, The density-matrix renormalization group in the age
+of matrix product states, Ann.\ Phys.\ \textbf{326}, 96 (2011).
+\href{https://doi.org/10.1016/j.aop.2010.09.012}{https://doi.org/10.1016/j.aop.2010.09.012}
+
+\bibitem{Lehoucq1998}
+R.~B.~Lehoucq, D.~C.~Sorensen, C.~Yang, \emph{ARPACK Users' Guide}
+(SIAM, Philadelphia, 1998).
+\href{https://doi.org/10.1137/1.9780898719628}{https://doi.org/10.1137/1.9780898719628}
+
+\bibitem{Marshall1955}
+W.~Marshall, Antiferromagnetism, Proc.\ R.\ Soc.\ London A
+\textbf{232}, 48 (1955).
+\href{https://doi.org/10.1098/rspa.1955.0204}{https://doi.org/10.1098/rspa.1955.0204}
+
+\bibitem{LiebMattis1962}
+E.~H.~Lieb, D.~Mattis, Ordering energy and specific heat of a linear
+antiferromagnet, J.\ Math.\ Phys.\ \textbf{3}, 749 (1962).
+\href{https://doi.org/10.1063/1.1724280}{https://doi.org/10.1063/1.1724280}
+
+\bibitem{Cardy1984}
+J.~L.~Cardy, Conformal invariance and surface critical behavior,
+Nucl.\ Phys.\ B \textbf{240}, 514 (1984).
+\href{https://doi.org/10.1016/0550-3213(84)90241-4}{https://doi.org/10.1016/0550-3213(84)90241-4}
+
+\bibitem{Affleck1989}
+I.~Affleck, D.~Gepner, H.~J.~Schulz, T.~Ziman, Critical behaviour of
+spin-$s$ Heisenberg antiferromagnetic chains: analytic and numerical
+results, J.\ Phys.\ A \textbf{22}, 511 (1989).
+\href{https://doi.org/10.1088/0305-4470/22/5/005}{https://doi.org/10.1088/0305-4470/22/5/005}
+
+\bibitem{Calabrese2004}
+P.~Calabrese, J.~Cardy, Entanglement entropy and quantum field
+theory, J.\ Stat.\ Mech.\ (2004) P06002.
+\href{https://doi.org/10.1088/1742-5468/2004/06/P06002}{https://doi.org/10.1088/1742-5468/2004/06/P06002}
+
+\bibitem{Laflorencie2006}
+N.~Laflorencie, E.~S.~S{\o}rensen, M.-S.~Chang, I.~Affleck, Boundary
+effects in the critical scaling of entanglement entropy in 1D
+systems, Phys.\ Rev.\ Lett.\ \textbf{96}, 100603 (2006).
+\href{https://doi.org/10.1103/PhysRevLett.96.100603}{https://doi.org/10.1103/PhysRevLett.96.100603}
+
+\end{thebibliography}
+
+% =========================================================================
+\appendix
+
+\section{XXZ reference data}
+\label{app:xxz}
+
+\begin{table}[t]
+\centering
+\small
+\caption{Ground-state energy per site of the four models (Pauli
+convention).}
+\label{tab:xxz}
+\begin{tabular}{rrrrr}
+\toprule
+$N$ & TFI & Heisenberg & XXZ ($\Delta=0.5$) & XXZ ($\Delta=2.0$) \\
+\midrule
+4  & $-1.189693$ & $-1.616025$ & $-1.356086$ & $-2.186141$ \\
+6  & $-1.216038$ & $-1.662385$ & $-1.398592$ & $-2.262953$ \\
+8  & $-1.229744$ & $-1.687466$ & $-1.421625$ & $-2.305637$ \\
+10 & $-1.238149$ & $-1.703214$ & $-1.436100$ & $-2.333073$ \\
+12 & $-1.243831$ & $-1.714030$ & $-1.446049$ & $-2.352318$ \\
+14 & $-1.247929$ & $-1.721921$ & $-1.453312$ & $-2.366633$ \\
+16 & $-1.251024$ & $-1.727934$ & $-1.458847$ & $-2.377738$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\end{document}

@@ -1,0 +1,18 @@
+session_id: 20261007_070101
+timestamp_local: 2026-10-07T07:01:01.529411
+python: 3.11.14
+platform: Windows-10-10.0.26200-SP0
+processor: Intel64 Family 6 Model 142 Stepping 12, GenuineIntel
+machine: AMD64
+hostname: DESKTOP-1D92SJT
+numpy: 1.24.3
+scipy: 1.15.3
+OMP_NUM_THREADS: 1
+threadpool_info:
+  internal_api=openblas num_threads=1 filepath=C:\Users\MicroTech\miniconda3\envs\vqe\Lib\site-packages\numpy\.libs\libopenblas64__v0.3.21-gcc_10_3_0.dll
+  internal_api=openblas num_threads=1 filepath=C:\Users\MicroTech\miniconda3\envs\vqe\Lib\site-packages\scipy.libs\libscipy_openblas-f07f5a5d207a3a47104dca54d6d0c86a.dll
+cpu_logical: 8
+cpu_physical: 4
+ram_total_gb: 17.0
+battery_percent: 93
+power_plugged: True

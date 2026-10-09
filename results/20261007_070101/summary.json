@@ -1,0 +1,17 @@
+{
+  "session_id": "20261007_070101",
+  "numpy": "1.24.3",
+  "scipy": "1.15.3",
+  "mode": "full",
+  "seed": 42,
+  "threadpool": [
+    {
+      "internal_api": "openblas",
+      "num_threads": 1
+    },
+    {
+      "internal_api": "openblas",
+      "num_threads": 1
+    }
+  ]
+}
