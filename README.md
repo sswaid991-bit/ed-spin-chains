@@ -25,4 +25,3 @@ Outputs go to `results/<session_id>/`.
 ## Logged sessions
 
 - `results/20261007_070101/` — main session; all values in the paper
-- `results/20261007_091116/` — second session for reproducibility
